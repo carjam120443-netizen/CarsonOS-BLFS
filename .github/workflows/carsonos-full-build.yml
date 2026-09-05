@@ -13,6 +13,11 @@ on:
         required: true
         default: true
         type: boolean
+      build_iso:
+        description: Assemble and upload the CarsonOS ISO
+        required: true
+        default: true
+        type: boolean
   push:
     tags:
       - 'build-*'
@@ -54,6 +59,15 @@ jobs:
           command -v wget
           df -h /mnt || true
 
+      - name: Install ISO assembly dependencies
+        if: ${{ inputs.build_iso || github.event_name != 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y grub-pc-bin grub-common xorriso
+
       - name: Build complete LFS 13.0-systemd system
         if: ${{ inputs.build_lfs || github.event_name != 'workflow_dispatch' }}
         shell: bash
@@ -82,6 +96,23 @@ jobs:
             echo "Porg: $(chroot "$LFS" /usr/bin/porg --version 2>/dev/null || true)"
           } | tee output/build-manifest.txt
 
+      - name: Check ISO build dependencies
+        if: ${{ inputs.build_iso || github.event_name != 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          chmod +x scripts/14-iso-deps-check.sh
+          ./scripts/14-iso-deps-check.sh
+
+      - name: Assemble CarsonOS ISO
+        if: ${{ inputs.build_iso || github.event_name != 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          chmod +x scripts/13-make-iso.sh
+          ./scripts/13-make-iso.sh
+          test -s output/carsonos-blfs-x86_64.iso
+          test -s output/carsonos-blfs-x86_64.iso.sha256
+          file output/carsonos-blfs-x86_64.iso
+
       - name: Archive LFS build logs
         if: always()
         uses: actions/upload-artifact@v6
@@ -105,4 +136,14 @@ jobs:
         with:
           name: carsonos-lfs-rootfs-${{ github.run_number }}
           path: output/carsonos-lfs-rootfs.tar.gz
+          if-no-files-found: error
+
+      - name: Upload CarsonOS ISO
+        if: ${{ success() && (inputs.build_iso || github.event_name != 'workflow_dispatch') }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: carsonos-blfs-x86_64-iso-${{ github.run_number }}
+          path: |
+            output/carsonos-blfs-x86_64.iso
+            output/carsonos-blfs-x86_64.iso.sha256
           if-no-files-found: error
