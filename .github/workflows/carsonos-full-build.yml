@@ -14,7 +14,7 @@ on:
         default: true
         type: boolean
       build_iso:
-        description: Assemble and upload the CarsonOS ISO
+        description: Assemble and upload the CarsonOS ISO and VirtualBox disk
         required: true
         default: true
         type: boolean
@@ -59,14 +59,14 @@ jobs:
           command -v wget
           df -h /mnt || true
 
-      - name: Install ISO assembly dependencies
+      - name: Install ISO and VirtualBox build dependencies
         if: ${{ inputs.build_iso || github.event_name != 'workflow_dispatch' }}
         shell: bash
         run: |
           set -Eeuo pipefail
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
-          apt-get install -y grub-pc-bin grub-common xorriso
+          apt-get install -y grub-pc-bin grub-common xorriso cpio gzip e2fsprogs virtualbox
 
       - name: Build complete LFS 13.0-systemd system
         if: ${{ inputs.build_lfs || github.event_name != 'workflow_dispatch' }}
@@ -102,8 +102,11 @@ jobs:
         run: |
           chmod +x scripts/14-iso-deps-check.sh
           ./scripts/14-iso-deps-check.sh
+          command -v VBoxManage
+          command -v mkfs.ext4
+          command -v mount
 
-      - name: Assemble CarsonOS ISO
+      - name: Assemble CarsonOS ISO and VirtualBox disk
         if: ${{ inputs.build_iso || github.event_name != 'workflow_dispatch' }}
         shell: bash
         run: |
@@ -111,7 +114,32 @@ jobs:
           ./scripts/13-make-iso.sh
           test -s output/carsonos-blfs-x86_64.iso
           test -s output/carsonos-blfs-x86_64.iso.sha256
-          file output/carsonos-blfs-x86_64.iso
+          test -s output/carsonos-blfs-x86_64.vdi
+          test -s output/carsonos-blfs-x86_64.vdi.sha256
+          file output/carsonos-blfs-x86_64.iso output/carsonos-blfs-x86_64.vdi
+
+      - name: Boot-test CarsonOS ISO with QEMU
+        if: ${{ inputs.build_iso || github.event_name != 'workflow_dispatch' }}
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+            echo 'QEMU is not installed on this runner; skipping runtime smoke test.'
+            exit 0
+          fi
+          timeout 45s qemu-system-x86_64 \
+            -machine accel=tcg \
+            -m 1024 \
+            -smp 2 \
+            -cdrom output/carsonos-blfs-x86_64.iso \
+            -nographic \
+            -serial mon:stdio \
+            -no-reboot 2>&1 | tee output/qemu-boot.log || true
+          grep -E 'CarsonOS|systemd|Welcome|login|emergency shell' output/qemu-boot.log || {
+            echo 'QEMU smoke test did not show a CarsonOS/systemd boot marker.' >&2
+            exit 1
+          }
 
       - name: Archive LFS build logs
         if: always()
@@ -122,6 +150,7 @@ jobs:
             /mnt/carsonos-jhalfs/**/logs/**
             /mnt/carsonos-jhalfs/**/*.log
             output/build-manifest.txt
+            output/qemu-boot.log
           if-no-files-found: warn
 
       - name: Archive target filesystem
@@ -138,12 +167,14 @@ jobs:
           path: output/carsonos-lfs-rootfs.tar.gz
           if-no-files-found: error
 
-      - name: Upload CarsonOS ISO
+      - name: Upload CarsonOS ISO and VirtualBox disk
         if: ${{ success() && (inputs.build_iso || github.event_name != 'workflow_dispatch') }}
         uses: actions/upload-artifact@v6
         with:
-          name: carsonos-blfs-x86_64-iso-${{ github.run_number }}
+          name: carsonos-blfs-x86_64-images-${{ github.run_number }}
           path: |
             output/carsonos-blfs-x86_64.iso
             output/carsonos-blfs-x86_64.iso.sha256
+            output/carsonos-blfs-x86_64.vdi
+            output/carsonos-blfs-x86_64.vdi.sha256
           if-no-files-found: error
