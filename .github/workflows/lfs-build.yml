@@ -1,0 +1,75 @@
+name: CarsonOS BLFS build validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_host_check:
+        description: Run the host prerequisite checker
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  validate:
+    name: Validate LFS build scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Validate shell syntax
+        run: |
+          set -e
+          while IFS= read -r -d '' file; do
+            bash -n "$file"
+          done < <(find scripts -type f -name '*.sh' -print0)
+
+      - name: Run ShellCheck
+        run: |
+          shellcheck scripts/*.sh scripts/chapter6/*.sh
+
+      - name: Verify pinned LFS configuration
+        run: |
+          set -e
+          grep -q '^LFS_VERSION=13.0$' config/lfs.conf
+          grep -q '^LFS_FLAVOR=systemd$' config/lfs.conf
+          grep -q '^BINUTILS_VERSION=2.46.0$' config/lfs.conf
+          grep -q '^GCC_VERSION=15.2.0$' config/lfs.conf
+          grep -q '^GLIBC_VERSION=2.43$' config/lfs.conf
+          grep -q '^M4_VERSION=1.4.21$' config/lfs.conf
+          grep -q '^GAWK_VERSION=5.3.2$' config/lfs.conf
+          grep -q '^XZ_VERSION=5.8.2$' config/lfs.conf
+
+      - name: Verify Chapter 6 dispatcher
+        run: |
+          set -e
+          for name in m4 ncurses bash coreutils diffutils file findutils gawk grep gzip make patch sed tar xz binutils-pass2 gcc-pass2; do
+            test -f "scripts/chapter6/$name.sh"
+          done
+          test -x scripts/07-build-temporary-tools.sh || chmod +x scripts/07-build-temporary-tools.sh
+
+      - name: Host checker
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_host_check }}
+        run: bash scripts/00-host-check.sh
+
+  build-self-test:
+    name: Check build script dependencies
+    runs-on: ubuntu-24.04
+    needs: validate
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check required source variables are referenced
+        run: |
+          set -e
+          grep -q 'LFS_TGT' scripts/07-build-temporary-tools.sh
+          grep -q 'SOURCES' scripts/07-build-temporary-tools.sh
+          grep -q 'LFS' scripts/07-build-temporary-tools.sh
+          echo 'Build dispatcher structure looks valid.'
