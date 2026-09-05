@@ -1,0 +1,21 @@
+# Build output
+build/
+sources/
+work/
+output/
+iso/*.iso
+iso/*.img
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
